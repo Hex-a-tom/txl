@@ -1,6 +1,6 @@
 use super::sheet::Sheet;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Node {
     Err,
     Add,
@@ -29,32 +29,33 @@ impl Node {
             Node::Err => false,
             Node::Cell(_, _) => false,
             Node::Val(_) => false,
-            _ => true, 
+            _ => true,
         }
     }
 
-    fn eval(&self) -> Result<i64, ()> {
+    fn eval(&self) -> Result<i64, ExecutionError> {
         match self {
             Node::Cell(_, _) => todo!(),
             Node::Val(v) => Ok(*v),
-            _ => Err(())
+            _ => Err(ExecutionError::NotImpemented),
         }
     }
 
     // TODO: Combine eval and calc
-    fn calc(&self, stack: &mut Vec<i64>) -> Result<i64, ()> {
-        match self{
-            Node::Add => Ok(stack.pop().ok_or(())? + stack.pop().ok_or(())?),
+    fn calc(&self, stack: &mut Vec<i64>) -> Result<i64, ExecutionError> {
+        use ExecutionError::OutOfStack;
+        match self {
+            Node::Add => Ok(stack.pop().ok_or(OutOfStack)? + stack.pop().ok_or(OutOfStack)?),
             Node::Sub => {
-                let sub = stack.pop().ok_or(())?;
-                Ok(stack.pop().ok_or(())? - sub)
-            } ,
-            Node::Mul => Ok(stack.pop().ok_or(())? * stack.pop().ok_or(())?),
+                let sub = stack.pop().ok_or(OutOfStack)?;
+                Ok(stack.pop().ok_or(OutOfStack)? - sub)
+            }
+            Node::Mul => Ok(stack.pop().ok_or(OutOfStack)? * stack.pop().ok_or(OutOfStack)?),
             Node::Div => {
-                let nom = stack.pop().ok_or(())?;
-                Ok(stack.pop().ok_or(())? / nom)
-            },
-            _ => Err(())
+                let nom = stack.pop().ok_or(OutOfStack)?;
+                Ok(stack.pop().ok_or(OutOfStack)? / nom)
+            }
+            _ => Err(ExecutionError::NotImpemented),
         }
     }
 
@@ -63,13 +64,13 @@ impl Node {
     }
 }
 
-pub fn parse(expr: &str) -> Result<Vec<Node>, ()> {
+pub fn parse(expr: &str) -> ByteCode {
     let mut expression = vec![];
     let mut stack: Vec<Node> = vec![];
 
     for n in Lexer::new(expr) {
         if n == Node::Err {
-            return Err(());
+            return ByteCode { code: Err(()) };
         } else if !n.is_op() {
             expression.push(n);
         } else {
@@ -87,22 +88,70 @@ pub fn parse(expr: &str) -> Result<Vec<Node>, ()> {
         expression.push(s)
     }
 
-    Ok(expression)
+    ByteCode {
+        code: Ok(expression),
+    }
 }
 
-pub fn execute(expr: Vec<Node>, sheet: Sheet) -> Result<i64, ()>{
-    let mut stack = vec![];
+#[derive(Debug, Clone, Copy)]
+pub enum ExecutionError {
+    CompilationError,
+    NotImpemented,
+    SyntaxError,
+    OutOfStack,
+    DivByZero,
+    NotExecuted,
+    Cyclic,
+    CellNotFound,
+}
 
-    for n in expr {
-        if n.is_op() {
-            let v = n.calc(&mut stack)?;
-            stack.push(v);
-        } else {
-            stack.push(n.eval()?)
+#[derive(Debug, Clone)]
+pub struct ByteCode {
+    code: Result<Vec<Node>, ()>,
+}
+
+impl ByteCode {
+    pub fn execute(&self, sheet: &Sheet) -> Result<i64, ExecutionError> {
+        match &self.code {
+            Ok(expr) => {
+                let mut stack = vec![];
+
+                for n in expr {
+                    if let Node::Cell(x, y) = n {
+                        if let Some(c) = sheet[*x][*y].val() {
+                            stack.push(c);
+                        } else {
+                            return Err(ExecutionError::CellNotFound);
+                        }
+                    } else if n.is_op() {
+                        let v = n.calc(&mut stack)?;
+                        stack.push(v);
+                    } else {
+                        stack.push(n.eval()?)
+                    }
+                }
+
+                stack.last().ok_or(ExecutionError::OutOfStack).copied()
+            }
+            Err(e) => Err(ExecutionError::CompilationError),
         }
     }
 
-    stack.last().ok_or(()).copied()
+    pub fn deps(&self, pos: (u16, u16)) -> Vec<(u16, u16)> {
+        match &self.code {
+            Ok(expr) => expr
+                .iter()
+                .filter_map(|c| {
+                    if let Node::Cell(x, y) = c {
+                        Some((*x as u16, *y as u16))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            Err(e) => vec![],
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -112,9 +161,7 @@ struct Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     pub fn new(s: &'a str) -> Self {
-        Lexer {
-            s
-        }
+        Lexer { s }
     }
 }
 
@@ -146,7 +193,7 @@ impl<'a> Iterator for Lexer<'a> {
                 return Some(num.parse().map_or(Err, |x| Val(x)));
             } else if ch == '+' {
                 self.s = &self.s[1..];
-                return Some(Add)
+                return Some(Add);
             } else if ch == '-' {
                 self.s = &self.s[1..];
                 return Some(Sub);
@@ -157,9 +204,9 @@ impl<'a> Iterator for Lexer<'a> {
                 self.s = &self.s[1..];
                 return Some(Div);
             } else if let Some(index) = LETTERS.iter().position(|x| *x == ch) {
-                let row = self.s.chars().nth(2).unwrap().to_digit(10).unwrap();
+                let row = self.s.chars().nth(1).unwrap().to_digit(10).unwrap();
                 self.s = &self.s[2..];
-                return Some(Cell(index, row as usize));
+                return Some(Cell(index, row as usize - 1));
             }
             Some(Err)
         } else {

@@ -91,7 +91,7 @@ impl Controller {
                             self.set_entry()?;
                         }
                         KeyCode::Enter => {
-                            self.sheet[self.selection.0][self.selection.1] = parse(&self.entry);
+                            self.sheet.insert_cell(parse(&self.entry), self.selection);
                             self.ui.redraw(&self.sheet)?;
                         }
                         KeyCode::Backspace => {

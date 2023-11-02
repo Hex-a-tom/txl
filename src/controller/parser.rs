@@ -1,13 +1,13 @@
-use crate::model::{sheet::Cell, calc};
+use std::rc::Rc;
+
+use crate::model::{sheet::{Cell, Expression}, calc};
 
 pub fn parse(s: &str) -> Cell {
+    // TODO: Impement back the non expression types
     match s.chars().next() {
         Some(c) => if c == '=' {
-            let par = calc::parse(&s[1..]);
-            match par {
-                Ok(o) => Cell::Expression(s.to_string(), 0),
-                Err(_) => Cell::ErrExpression(s.to_string()),
-            }
+            let ex = Expression::new(s.to_owned());
+            Cell::Expression(Rc::new(ex), Err(calc::ExecutionError::NotExecuted))
         } else {
             match s.parse() {
                 Ok(o) => Cell::Val(o),
